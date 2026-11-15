@@ -42,9 +42,16 @@ class Execution:
 
 @dataclass
 class Batch:
-    """一个对照批次：同一事务内 4 次执行 + 结论。"""
+    """一个对照批次：同一事务内 4 次执行 + 结论。
+
+    数据版本在批次启动时钉死（version_id/schema_name），四次执行都读该版本，
+    即使运行期间发布了新版。
+    """
 
     sql: str
+    version_id: int | None = None      # 启动时选定的数据版本
+    version_label: str | None = None
+    schema_name: str | None = None     # 该版本所在的 schema
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     status: str = "pending"  # pending|running|completed|failed|timeout|cancelled
     cancel_requested: bool = False
@@ -59,6 +66,9 @@ class Batch:
         return {
             "id": self.id,
             "sql": self.sql,
+            "version_id": self.version_id,
+            "version_label": self.version_label,
+            "schema_name": self.schema_name,
             "status": self.status,
             "cancel_requested": self.cancel_requested,
             "error": self.error,

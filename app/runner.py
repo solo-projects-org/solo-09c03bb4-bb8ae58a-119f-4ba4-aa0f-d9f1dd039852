@@ -4,6 +4,8 @@
 - 同时只运行一批（busy 名额）；满额时新提交直接提示繁忙；
 - 四次 EXPLAIN (ANALYZE, FORMAT JSON) 在同一个「可重复读 + 只读」事务里执行，
   共享同一快照，期间其他连接照常写入也不影响本批；
+- 批次启动时把 search_path 钉在选定数据版本的 schema 上，四次执行都读该版本，
+  即使运行期间发布了新的演示版本；
 - 每次执行由服务端 statement_timeout=10s 限时，另有客户端兜底超时；
 - 取消通过 pg_cancel_backend 让正在执行的 SQL 真正停下来；
 - 名额在本批 SQL 实际停止、事务结束、连接关闭之后才释放。
@@ -18,6 +20,7 @@ import asyncpg
 
 from plans import build_conclusion, plan_structure
 from store import Batch, BatchStore, Execution
+from versions import quote_ident
 
 STATEMENT_TIMEOUT_MS = 10_000   # 每次执行限时 10 秒（服务端）
 CLIENT_BACKSTOP_S = 15.0        # 客户端兜底超时，到点直接断开连接
@@ -76,6 +79,12 @@ class BatchRunner:
             # 同一可重复读只读事务：四次执行共享同一快照
             await conn.execute("BEGIN ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             await conn.execute(f"SET LOCAL statement_timeout = {STATEMENT_TIMEOUT_MS}")
+            # 版本钉住：未限定 schema 的样表名解析到启动时选定的数据版本，
+            # 本批四次执行都读该版本，即使随后发布了新版
+            if batch.schema_name:
+                await conn.execute(
+                    f"SET LOCAL search_path = {quote_ident(batch.schema_name)}, public"
+                )
 
             seq = 0
             for round_no, steps in ROUNDS:

@@ -34,13 +34,20 @@ textarea {
   padding: 10px;
   resize: vertical;
 }
-.row { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
+.row { display: flex; align-items: center; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
 select {
   font-size: 13px;
   padding: 6px 8px;
   border: 1px solid #cbd5e1;
   border-radius: 6px;
   max-width: 100%;
+}
+input[type="number"] {
+  font-size: 13px;
+  padding: 6px 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  width: 110px;
 }
 .row label.hint { white-space: nowrap; }
 button {
@@ -118,6 +125,10 @@ pre.sql {
 .ex-status.running { color: #d97706; }
 .ex-status.timeout, .ex-status.error { color: #dc2626; }
 .ex-status.cancelled { color: #6b7280; }
+.ex-status.building { color: #d97706; }
+.ex-status.published { color: #16a34a; }
+.ex-status.superseded { color: #6b7280; }
+.ex-status.failed { color: #dc2626; }
 .ex-detail { margin-top: 12px; border-top: 1px dashed #e2e8f0; padding-top: 8px; }
 .ex-detail h4 { margin: 4px 0 8px; font-size: 13px; }
 pre.struct {

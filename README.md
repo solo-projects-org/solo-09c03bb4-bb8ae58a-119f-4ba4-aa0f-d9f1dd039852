@@ -3,6 +3,9 @@
 迁库后夜间结算 SQL 变慢，用这个小工具在同一份数据上对比 **默认计划** 与
 **抑制嵌套循环（`SET LOCAL enable_nestloop=off`）** 的实际执行效果。
 
+支持按不同商户集中度生成**演示数据版本**（独立 schema、与样表同结构），
+不改动正在补记的原始样表，即可复现不同程度的计划误选。
+
 ## 快速开始
 
 ```bash
@@ -33,6 +36,35 @@ docker compose down -v && docker compose up --build
 第二轮颠倒顺序，用来抵消缓存预热造成的偏差。四次执行共享**同一事务快照**，
 对照期间其他连接照常写入（页面上的「补记样表数据」按钮可随时插一行），
 新数据不会进入本批结果。
+
+## 演示数据版本
+
+数仓侧想换不同的商户集中度复现误选计划，又不能动正在补记的样表——
+在网页「生成演示数据版本」里填 **订单数（最多 10 万）** 和
+**前 100 家商户的订单占比（%）**，后台会在独立 schema（`demo_v<N>`）里
+生成与样表**同结构**的 `merchants`、`settlement_orders` 两张可查询演示表
+（商户 5000 家、前 100 家为类别 A，与样表口径一致；原始样表留在
+`public`，补记照常）。
+
+版本语义：
+
+- **成功后设为默认演示版**：构建全部完成并发布后，新版本成为当前默认；
+  之后未指定版本的批次都用它；
+- **新批次可选旧版**：所有已发布版本（含 0 号「原始样表」）都保留，
+  网页下拉框可任选；SQL 里**未限定 schema 的样表名**按所选版本读取
+  （批次事务内 `SET LOCAL search_path = <版本schema>, public`）；
+- **生成期间旧版仍可查询**：新 schema 在发布前对查询不可见，
+  当前默认版本指针在构建期间不动；
+- **失败不留半成品**：建 schema、建表、灌数、建索引、ANALYZE 全在
+  **单个事务**内，任一步失败整体回滚，既不发布半成品，也不改变当前版本；
+- **交错提交，后到者优先**：`version_id` 取自序列即提交顺序；发布是
+  advisory lock 保护的短事务，若更晚提交的版本已抢先发布，先提交的
+  迟到结果标记为「被取代」并丢弃 schema，**绝不覆盖**当前版本；
+- **批次钉住启动时的版本**：批次启动时解析版本并固定 `search_path`，
+  四次执行都读该版本，即使运行期间发布了新版。
+
+版本注册表 `public.demo_versions` 持久化在数据库里（重启不丢）；
+服务重启时会把中断的「构建中」版本标记失败并清理残留 schema。
 
 ## 结论判定规则
 
@@ -88,11 +120,13 @@ ORDER BY total_amount DESC;
 
 | 方法 | 路径 | 说明 |
 |-----|------|------|
-| POST | `/api/batches` | 提交对照批次（409=繁忙，400=SQL 校验失败） |
+| POST | `/api/batches` | 提交对照批次（409=繁忙，400=SQL 校验或版本失败）；可带 `version_id` 选择数据版本，缺省用当前默认 |
 | GET  | `/api/batches` | 批次列表（不含完整计划 JSON） |
 | GET  | `/api/batches/{id}` | 批次详情（含 4 次计划 JSON 与结构摘要） |
 | POST | `/api/batches/{id}/cancel` | 取消运行中的批次 |
-| POST | `/api/sample-row` | 向 `settlement_orders` 补记一行 |
+| POST | `/api/sample-row` | 向 `public.settlement_orders` 补记一行 |
+| POST | `/api/demo-versions` | 提交演示版本生成请求（`order_count`≤10 万、`top100_share` 0–100），后台构建 |
+| GET  | `/api/demo-versions` | 版本列表（含当前默认版本指针） |
 
 ## 目录结构
 
@@ -101,8 +135,9 @@ ORDER BY total_amount DESC;
 ├── db/init.sql            # 结算样表 + 倾斜数据
 └── app/
     ├── Dockerfile
-    ├── main.py            # FastAPI 入口
-    ├── runner.py          # 批次执行器（单事务 4 次执行、限时、取消、名额管理）
+    ├── main.py            # FastAPI 入口（批次 / 补记 / 演示版本 API）
+    ├── runner.py          # 批次执行器（单事务 4 次执行、版本钉住、限时、取消、名额管理）
+    ├── versions.py        # 演示数据版本：单事务构建、串行化发布、迟到结果不覆盖
     ├── plans.py           # 计划结构归一化 + 结论判定
     ├── sqlcheck.py        # 只读 SELECT 校验
     ├── store.py           # 内存批次仓库

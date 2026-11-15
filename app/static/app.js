@@ -25,10 +25,13 @@ ORDER BY settle_date`,
 };
 
 const sqlInput = document.getElementById('sql-input');
+const versionSelect = document.getElementById('version-select');
 sqlInput.value = PRESETS.skew;
 document.getElementById('preset').onchange = (e) => {
   sqlInput.value = PRESETS[e.target.value] || '';
 };
+
+let versionsState = { current_version_id: null, versions: [] };
 
 const expanded = new Set();   // 展开了计划详情的批次 id
 
@@ -47,6 +50,9 @@ const EX_STATUS_TEXT = {
 const VERDICT_TEXT = {
   improved: '有改善', not_improved: '无改善', inconclusive: '无法判断改善',
 };
+const VSTATUS_TEXT = {
+  building: '构建中', published: '已发布', superseded: '被取代（未生效）', failed: '失败',
+};
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({
@@ -55,6 +61,53 @@ function escapeHtml(s) {
 }
 function fmtMs(v) { return v == null ? '—' : Number(v).toFixed(1) + ' ms'; }
 function fmtTime(ts) { return ts ? new Date(ts * 1000).toLocaleString() : '—'; }
+function fmtIso(s) { return s ? new Date(s).toLocaleString() : '—'; }
+
+function versionName(v) {
+  return `#${v.version_id} ${v.label}（${v.order_count} 单 / 前100家 ${v.top100_share}%）`;
+}
+
+async function refreshVersions() {
+  try {
+    const res = await fetch('/api/demo-versions');
+    if (!res.ok) return;
+    versionsState = await res.json();
+    renderVersionSelect();
+    renderVersions();
+  } catch (e) { /* 忽略瞬时网络错误，下一轮再试 */ }
+}
+
+function renderVersionSelect() {
+  const prev = versionSelect.value;
+  const published = versionsState.versions.filter(v => v.status === 'published');
+  const cur = versionsState.versions.find(v => v.is_current);
+  let html = `<option value="">跟随当前默认${cur ? `（${versionName(cur)}）` : ''}</option>`;
+  html += published.map(v =>
+    `<option value="${v.version_id}">${escapeHtml(versionName(v))}${v.is_current ? '（当前默认）' : ''}</option>`
+  ).join('');
+  versionSelect.innerHTML = html;
+  // 刷新后尽量保留用户已选的版本
+  if ([...versionSelect.options].some(o => o.value === prev)) versionSelect.value = prev;
+}
+
+function renderVersions() {
+  const box = document.getElementById('versions');
+  const vs = versionsState.versions;
+  if (!vs.length) { box.innerHTML = '<p class="hint">暂无版本</p>'; return; }
+  box.innerHTML = `<table class="ex-table">
+    <thead><tr><th>版本</th><th>schema</th><th>订单数</th><th>前100家占比</th>
+    <th>状态</th><th>提交时间</th><th>发布时间</th><th>备注</th></tr></thead>
+    <tbody>${vs.map(v => `<tr>
+      <td>#${v.version_id} ${escapeHtml(v.label)}${v.is_current ? ' <span class="badge completed">当前默认</span>' : ''}</td>
+      <td><code>${escapeHtml(v.schema_name)}</code></td>
+      <td>${v.order_count}</td>
+      <td>${v.top100_share}%</td>
+      <td><span class="ex-status ${v.status}">${VSTATUS_TEXT[v.status] || v.status}</span></td>
+      <td>${fmtIso(v.created_at)}</td>
+      <td>${fmtIso(v.published_at)}</td>
+      <td>${v.error ? escapeHtml(v.error) : ''}</td>
+    </tr>`).join('')}</tbody></table>`;
+}
 
 async function refresh() {
   try {
@@ -63,6 +116,7 @@ async function refresh() {
     renderSlot(data);
     await renderBatches(data.batches);
   } catch (e) { /* 忽略瞬时网络错误，下一轮再试 */ }
+  refreshVersions();
 }
 
 function renderSlot(data) {
@@ -123,6 +177,7 @@ function batchCardHtml(b) {
       <span class="badge ${b.status}">${STATUS_TEXT[b.status] || b.status}</span>
       <code>#${b.id}</code>
       <span class="hint">提交于 ${fmtTime(b.created_at)}</span>
+      ${b.version_label ? `<span class="hint">数据版本：${escapeHtml(b.version_label)}（${escapeHtml(b.schema_name || '')}）</span>` : ''}
       <span class="spacer"></span>
       ${cancelBtn}${toggleBtn}
     </div>
@@ -191,11 +246,12 @@ document.getElementById('run-btn').onclick = async () => {
   const msg = document.getElementById('submit-msg');
   msg.className = 'msg';
   msg.textContent = '提交中…';
+  const v = versionSelect.value;
   try {
     const res = await fetch('/api/batches', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sql: sqlInput.value }),
+      body: JSON.stringify({ sql: sqlInput.value, version_id: v === '' ? null : Number(v) }),
     });
     if (res.status === 409) {
       msg.textContent = '繁忙：已有对照批次在运行，请稍后再试';
@@ -235,6 +291,45 @@ document.getElementById('insert-btn').onclick = async () => {
     msg.textContent = '网络错误：' + e;
     msg.classList.add('err');
   }
+};
+
+document.getElementById('gen-btn').onclick = async () => {
+  const msg = document.getElementById('gen-msg');
+  const orderCount = Number(document.getElementById('order-count').value);
+  const share = Number(document.getElementById('top-share').value);
+  msg.className = 'msg';
+  if (!Number.isInteger(orderCount) || orderCount < 1 || orderCount > 100000) {
+    msg.textContent = '订单数需为 1～100000 的整数';
+    msg.classList.add('err');
+    return;
+  }
+  if (!(share >= 0 && share <= 100)) {
+    msg.textContent = '前 100 家商户订单占比需在 0～100 之间';
+    msg.classList.add('err');
+    return;
+  }
+  msg.textContent = '提交中…';
+  try {
+    const res = await fetch('/api/demo-versions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ order_count: orderCount, top100_share: share }),
+    });
+    if (res.ok) {
+      const d = await res.json();
+      msg.textContent = `版本 #${d.version.version_id} 已提交，后台构建中，完成后自动发布为默认版本`;
+      msg.classList.add('ok');
+    } else {
+      const d = await res.json().catch(() => ({}));
+      const detail = typeof d.detail === 'string' ? d.detail : JSON.stringify(d.detail || {});
+      msg.textContent = '提交失败：' + (detail || 'HTTP ' + res.status);
+      msg.classList.add('err');
+    }
+  } catch (e) {
+    msg.textContent = '网络错误：' + e;
+    msg.classList.add('err');
+  }
+  refreshVersions();
 };
 
 refresh();

@@ -21,6 +21,10 @@
       单次执行限时 10 秒；同时只运行一批，满额会提示繁忙。
     </p>
     <div class="row">
+      <label for="version-select" class="hint">数据版本：</label>
+      <select id="version-select"></select>
+    </div>
+    <div class="row">
       <label for="preset" class="hint">预设样例：</label>
       <select id="preset">
         <option value="skew">类别 A 结算汇总（倾斜 + 表达式过滤，默认易误选嵌套循环）</option>
@@ -39,11 +43,40 @@
     <h2>补记样表数据</h2>
     <p class="hint">
       对照运行期间也可正常入库；对照事务使用同一快照，新补记的行不会进入本批结果。
+      补记只写原始样表（public），不影响各演示版本。
     </p>
     <div class="row">
       <button id="insert-btn">向 settlement_orders 补记一行</button>
       <span id="insert-msg" class="msg"></span>
     </div>
+  </section>
+
+  <section class="card">
+    <h2>生成演示数据版本</h2>
+    <p class="hint">
+      按订单数（最多 10 万）与前 100 家商户订单占比，生成一对与样表同结构的演示表
+      （独立 schema 的 merchants / settlement_orders，原始样表不受影响）。
+      生成期间当前版本照常可查；构建全部成功后才发布为新的默认版本，
+      建表或写入失败不会留下半成品，也不会改变当前版本。
+      多个生成请求交错时，较晚提交的版本发布后，先提交的迟到结果不会覆盖它。
+    </p>
+    <div class="row">
+      <label for="order-count" class="hint">订单数：</label>
+      <input id="order-count" type="number" min="1" max="100000" step="1" value="50000">
+      <label for="top-share" class="hint">前 100 家商户订单占比（%）：</label>
+      <input id="top-share" type="number" min="0" max="100" step="0.5" value="70">
+      <button id="gen-btn">生成新版本</button>
+      <span id="gen-msg" class="msg"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>数据版本</h2>
+    <p class="hint">
+      新批次默认使用「当前默认」版本，也可在上方下拉框选择任意已发布旧版；
+      未限定 schema 的样表名（settlement_orders / merchants）按所选版本读取。
+    </p>
+    <div id="versions"></div>
   </section>
 
   <section>
